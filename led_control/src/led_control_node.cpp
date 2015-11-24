@@ -10,7 +10,7 @@
 std::string state = "Waiting";
 bool send_flag = true;
 
-void state_Callback(const std_msgs::String::ConstPtr& state_msg)
+void stateCallback(const std_msgs::String::ConstPtr& state_msg)
 {
 	state = state_msg -> data;
 	send_flag = true;
@@ -25,7 +25,7 @@ int main(int argc, char **argv)
 
 
 	// subscriber and publisher
-	ros::Subscriber sub = n.subscribe("state", 1000, state_Callback);
+  ros::Subscriber sub = n.subscribe("state", 1000, stateCallback);
 	ros::Publisher pub = n.advertise<sh2interface::sh2_tx>("sh2_tx", 1000);
 	
 	ros::Rate loop_rate(100);	// ループ頻度を設定(100 Hz)
@@ -33,12 +33,20 @@ int main(int argc, char **argv)
 	txdata.command = 0xb0;	// command
 	txdata.id = 0x21;		// id
 
-	double duty1 = 0; // R
-	double duty2 = M_PI/3; // G
-	double duty3 = M_PI*2/3; // B
+  struct Duty
+  {
+    double red;
+    double green;
+    double blue;
+  };
+
+  Duty duty;
+  duty.red = 0;
+  duty.green = M_PI/3.0;
+  duty.blue = M_PI*2.0/3.0;
 
 	while (ros::ok())
-	{
+  {
 		if(state == "Normal" || state == "Following")	// Normal
 		{
 			txdata.data[0] = 0x00;	// red
@@ -118,14 +126,14 @@ int main(int argc, char **argv)
 		}
 		else if(state == "Finish")	// Finish
 		{
-			txdata.data[0] = (uint8_t)(0xfe * sin(duty1) * sin(duty1));	// red
-			txdata.data[1] = (uint8_t)(0xfe * sin(duty2) * sin(duty2));	// green
-			txdata.data[2] = (uint8_t)(0xfe * sin(duty3) * sin(duty3));	// blue
+      txdata.data[0] = (uint8_t)(0xfe * sin(duty.red) * sin(duty.red));	// red
+      txdata.data[1] = (uint8_t)(0xfe * sin(duty.green) * sin(duty.green));	// green
+      txdata.data[2] = (uint8_t)(0xfe * sin(duty.blue) * sin(duty.blue));	// blue
 			txdata.data[3] = 0;	// interval
 
-			duty1 += DUTY_STEP;	if(duty1 > 2*M_PI)	duty1 = 0;
-			duty2 += DUTY_STEP;	if(duty2 > 2*M_PI)	duty2 = 0;
-			duty3 += DUTY_STEP;	if(duty3 > 2*M_PI)	duty3 = 0;
+      duty.red += DUTY_STEP;	if(duty.red > 2*M_PI)	duty.red = 0;
+      duty.green += DUTY_STEP;	if(duty.green > 2*M_PI)	duty.green = 0;
+      duty.blue += DUTY_STEP;	if(duty.blue > 2*M_PI)	duty.blue = 0;
 		}
 		else
 		{
@@ -141,15 +149,12 @@ int main(int argc, char **argv)
 			send_flag = false;
 		}
 
-		
-
 		ros::spinOnce();
 
 		loop_rate.sleep();
 	}
 
-	//TODO: 終了時に消灯
+  //TODO: 終了時に消灯 <-- sh2interfaceで実装済み？
 	
-
 	return 0;
 }
