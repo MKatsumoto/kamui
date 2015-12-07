@@ -1,3 +1,46 @@
+/********************************************************************************
+ * set_base_velocity_node.cpp
+ *
+ * stateの値に応じて、ベース部分の速度を決定して配信する。
+ *
+ * [Author] ??
+ * 
+ * [機能説明]
+ * stateの値に応じて、ベース部分の速度を決定して配信する。
+ *
+ * ・Normal, Following, Moving, Teleopのとき
+ *    指令速度で動く
+ *
+ * ・Trackingのとき
+ *    速度と角速度は０、ヨー角とDynamixelの角度は1step前と同じ値にする
+ *    Rotatingモードになるべくサービスでリクエストを送る
+ *
+ * ・Rotatingのとき
+ *    発見時のヨー角pre_yawと現在のcur_yaw（from calc_odometry_node）の差が発見時のDynamixelの角度を超えたら停止
+ * --> オドメトリのずれが直接的に姿勢に影響する & 遅延したら回転しすぎる。なお、回転方向はDynamixelの角度で決まる。
+ * 
+ * ・Closingのとき
+ *    frot_dist (cloudCallbackで更新される）がしきい値CLOSE_TO_VICTIMよりも大きいと
+ *    TRANSLATIONAL_VELでVictimに突撃する。しきい値より小さくなるとScanningモードに移行する。
+ *
+ * ・Leavingのとき
+ *    指令速度で動き、しきい値DISTCONSTより大きく動くとFollowingモードへ移行
+ *
+ * ・GetInfoのとき
+ *    停止して、現在の状態(posdata）を保存
+ *
+ * ・Scanning, Stop_temp, Waiting：停止する
+ *
+ * [改訂履歴]
+ * 2015/12/04 (Katsumoto)
+ *   プログラムの機能説明を追加。
+ *   Closingモードを削除・・・カメラの向きが常に壁側なら不要
+ *   Leavingモードの閾値DISTCONSTを0.5から1.0に変更。
+ *
+ * [TODO]
+ *   重要なパラメータはパラメータサーバから取得するように変更
+ ********************************************************************************/
+
 #include "ros/ros.h"
 #include "std_msgs/Int16.h"
 #include "geometry_msgs/Twist.h"
@@ -23,9 +66,9 @@
 
 #define TRANSLATIONAL_VEL 36//10		/*並進速度*/
 #define ROTATIONAL_VEL 36//10           /*回転速度*/
-#define DISTCONST		0.5			/*離脱モードの閾値*/
+#define DISTCONST		1.0 // 0.5			/*離脱モードの閾値*/
 #define ANGCONST		75.0*M_PI/180.0			/*離脱モードのangle閾値*/
-#define CLOSE_TO_VICTIM 0.38		//380mm以内になるまで近づく [m]
+#define CLOSE_TO_VICTIM 0.5		//500mm以内になるまで近づく [m]
 
 #define CONTROL_F 50//10	// 制御周期 [Hz]
 
@@ -75,17 +118,8 @@ void cloudCallback(const sensor_msgs::PointCloud::ConstPtr& msg)
 
 
 //-----------------------------------------------------
-// オドメトリデータのコールバック関数
+// オドメトリデータ(posdata)のコールバック関数
 //-----------------------------------------------------
-/*
-void odomCallback(const nav_msgs::Odometry::ConstPtr& msg)
-{
-	cur_x = msg->pose.pose.position.x;
-	cur_y = msg->pose.pose.position.y;
-	cur_yaw = tf::getYaw(msg->pose.pose.orientation);
-	ROS_INFO("cur_yaw: %f", cur_yaw);//debug
-}
-*/
 void roboposCallback(const calc_odometry::posdata::ConstPtr& msg)
 {
 	cur_x = msg->x;
@@ -130,6 +164,8 @@ int main(int argc, char **argv)
 	double pre_x, pre_y, pre_yaw;		// Leaving直前のロボットの位置、姿勢
 	double dyna_target;		// Rotatingの目標角度
 
+  bool leave_enough_distance = false; // Leavingモードで十分な距離を移動したかどうか判定するための論理変数
+
 	ros::Subscriber urg_sub = n.subscribe("cloud", 50, cloudCallback);
 	//ros::Subscriber odom_sub = n.subscribe("odom", 50, odomCallback);
 	ros::Subscriber robopos_sub = n.subscribe("robot_pos", 50, roboposCallback);
@@ -171,7 +207,7 @@ int main(int argc, char **argv)
 		else if(state == "Rotating")	// Rotating
 		{
 			//ROS_INFO("Rotating...  cur_yaw:%f, pre_yaw:%f", cur_yaw, pre_yaw);//debug
-			if(fabs(cur_yaw - pre_yaw) < fabs(dyna_target))	// 発見してから回転した角度が，ターゲット発見時のカメラの角度を超えると止まる
+      if(fabs(cur_yaw - pre_yaw) < fabs(dyna_target) - M_PI/12.0)	// 発見してから回転した角度が，ターゲット発見時のカメラの角度を超えると止まる
 			//if(fabs(cur_yaw - pre_yaw) < ROTATE_ANGLE)	// 発見してから回転した角度が，ターゲット発見時のカメラの角度を超えると止まる
 			{
 				//回転方向を変える
@@ -183,22 +219,6 @@ int main(int argc, char **argv)
 				ROS_INFO("Rotating...cur_yaw: %f  pre_yaw:%f  dyna_target:%f", cur_yaw, pre_yaw, dyna_target);//debug
 				srv.request.state = "Closing";
 				client.call(srv); // Closingモードへ
-			}
-		}
-		else if(state == "Closing")		// Closing
-		{
-			if(front_dist > CLOSE_TO_VICTIM)
-			{
-				bvel.linear = 2*TRANSLATIONAL_VEL;
-				bvel.angular = 0;
-				//ROS_INFO("Closing");//debug
-			}
-			else
-			{
-				bvel.linear = 0;	
-				bvel.angular = 0;
-				srv.request.state = "Scanning";
-				client.call(srv); // Scanningモードへ
 			}
 		}
 		else if(state == "Scanning")	// Scanning
@@ -220,7 +240,8 @@ int main(int argc, char **argv)
 			bvel.linear = (int)(linearVel / (Rw * CRAWLERFULL) * 100);
 			bvel.angular = (int)(angularVel / (Rw * CRAWLERFULL * 2 / (T * W_ADJUST)) * 100);
 			ROS_INFO("Leaving");//debug
-			if(sqrt(pow((cur_x-pre_x),2.0)+pow((cur_y-pre_y),2.0)) > DISTCONST)// || fabs(cur_yaw - pre_yaw) > ANGCONST + fabs(dyna_target))	// 熱源位置から一定距離離れるまでLeavingモード
+      leave_enough_distance = (sqrt(pow((cur_x-pre_x),2.0)+pow((cur_y-pre_y),2.0)) > DISTCONST);
+      if(leave_enough_distance)
 			{
 				//cout<<mess.Get_vicnum()+1<<"体目を見つけに行きます"<<endl;
 				/*
@@ -234,6 +255,7 @@ int main(int argc, char **argv)
 				}
 				*/
 				
+        leave_enough_distance = false;  // 次回のLeavingモードのためにfalseに戻しておく
 				srv.request.state = "Following";
 				client.call(srv); // Followingモードへ
 			}
