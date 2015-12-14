@@ -202,7 +202,7 @@ int main(int argc, char **argv)
 			dyna_target = cur_dyna_pos;
 			ROS_INFO("Tracking...cur_yaw: %f  pre_yaw:%f  dyna_target:%f", cur_yaw, pre_yaw, dyna_target);//debug
 			srv.request.state = "Rotating";
-			client.call(srv); // ROtatingモードへ
+      client.call(srv); // Rotatingモードへ
 		}
 		else if(state == "Rotating")	// Rotating
 		{
@@ -217,8 +217,8 @@ int main(int argc, char **argv)
 			else
 			{//ある程度回転したら
 				ROS_INFO("Rotating...cur_yaw: %f  pre_yaw:%f  dyna_target:%f", cur_yaw, pre_yaw, dyna_target);//debug
-				srv.request.state = "Closing";
-				client.call(srv); // Closingモードへ
+        srv.request.state = "Scanning";
+        client.call(srv); // Scanningモードへ
 			}
 		}
 		else if(state == "Scanning")	// Scanning
